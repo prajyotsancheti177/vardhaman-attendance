@@ -1,0 +1,14 @@
+# secrets
+ADMIN_PIN.txt
+.env*
+.vercel
+# build output
+node_modules
+android/.gradle
+android/build
+android/app/build
+android/local.properties
+*.keystore
+*.jks
+.DS_Store
+.idea
