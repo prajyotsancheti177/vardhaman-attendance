@@ -146,7 +146,7 @@ fun EntryEditor(draft: EntryDraft, onDismiss: () -> Unit, onSaved: () -> Unit) {
     val valid = exit > entry && worked > 0
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = {
             Column {
                 Text(draft.employee.name, fontWeight = FontWeight.SemiBold)
