@@ -11,7 +11,7 @@ data class Employee(val id: Long, val name: String, val phone: String, val hourl
 
 data class Entry(
     val id: Long, val employeeId: Long, val date: String,
-    val entry: String, val exit: String, val lunch: Int,
+    val entry: String, val exit: String, val lunch: Int, val extra: Int,
     val rate: Double, val minutes: Int, val amount: Double,
 )
 
@@ -50,7 +50,7 @@ object Api {
     private fun emp(o: JSONObject) = Employee(o.getLong("id"), o.str("name"), o.str("phone"), o.getDouble("hourly_rate"), o.getBoolean("active"))
     private fun entry(o: JSONObject) = Entry(
         o.getLong("id"), o.getLong("employee_id"), o.str("work_date"),
-        o.str("entry_time").take(5), o.str("exit_time").take(5), o.getInt("lunch_minutes"),
+        o.str("entry_time").take(5), o.str("exit_time").take(5), o.getInt("lunch_minutes"), o.optInt("extra_break_minutes", 0),
         o.getDouble("hourly_rate"), o.getInt("worked_minutes"), o.getDouble("amount"),
     )
     private fun adv(o: JSONObject) = Advance(o.getLong("id"), o.getLong("employee_id"), o.getDouble("amount"), o.str("given_on"), o.str("note"))
@@ -69,9 +69,9 @@ object Api {
     suspend fun entriesForMonth(empId: Long, month: String) =
         JSONArray(call("GET", "/entries?employee_id=$empId&month=$month")).map(::entry)
 
-    suspend fun saveEntry(empId: Long, date: String, entry: String, exit: String, lunch: Int) {
+    suspend fun saveEntry(empId: Long, date: String, entry: String, exit: String, lunch: Int, extra: Int) {
         call("PUT", "/entries", JSONObject().put("employee_id", empId).put("work_date", date)
-            .put("entry_time", entry).put("exit_time", exit).put("lunch_minutes", lunch))
+            .put("entry_time", entry).put("exit_time", exit).put("lunch_minutes", lunch).put("extra_break_minutes", extra))
     }
     suspend fun deleteEntry(id: Long) { call("DELETE", "/entries/$id") }
 

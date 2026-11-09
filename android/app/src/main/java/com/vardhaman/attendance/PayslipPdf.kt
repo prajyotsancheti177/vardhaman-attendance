@@ -7,7 +7,6 @@ import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import androidx.core.content.FileProvider
 import java.io.File
-import java.time.YearMonth
 
 /** Renders an A4 payslip PDF and opens the share sheet (WhatsApp, print, save…). */
 fun sharePayslip(ctx: Context, s: Slip) {
@@ -21,10 +20,9 @@ fun sharePayslip(ctx: Context, s: Slip) {
     fun right(t: String, x: Float, y: Float, paint: Paint) = c.drawText(t, x - paint.measureText(t), y, paint)
     var y = 64f
 
-    c.drawText("VARDHAMAN", L, y, Paint(bold).apply { textSize = 22f }); y += 18
-    c.drawText("Salary slip · ${prettyMonth(YearMonth.parse(s.month))}", L, y, muted); y += 32
-    c.drawText(s.employee.name, L, y, Paint(bold).apply { textSize = 15f })
-    right("Rate ${money(s.employee.hourlyRate)}/h", R, y, muted); y += 28
+    c.drawText(s.employee.name, L, y, Paint(bold).apply { textSize = 20f })
+    right("Rate ${rate(s.employee.hourlyRate)}/h", R, y, muted); y += 20
+    c.drawText(monthName(s.month), L, y, muted); y += 32
 
     val rows = listOf(
         "Days worked" to "${s.days}", "Total hours" to hours(s.minutes),
@@ -35,12 +33,19 @@ fun sharePayslip(ctx: Context, s: Slip) {
     c.drawText("Net pay", L, y, Paint(bold).apply { textSize = 14f })
     right(money(s.net), R, y, Paint(bold).apply { textSize = 14f }); y += 36
 
-    c.drawText("DATE", L, y, muted); c.drawText("IN", L + 140, y, muted); c.drawText("OUT", L + 200, y, muted)
-    c.drawText("LUNCH", L + 260, y, muted); right("HOURS", R - 90, y, muted); right("AMOUNT", R, y, muted); y += 16
-    for (e in s.entries) {
+    c.drawText("DATE", L, y, muted); c.drawText("IN", L + 110, y, muted); c.drawText("OUT", L + 180, y, muted)
+    c.drawText("BREAKS", L + 250, y, muted); right("HOURS", R - 90, y, muted); right("AMOUNT", R, y, muted); y += 16
+    val bad = Paint(p).apply { color = 0xFFC2410C.toInt() }
+    for ((date, e) in slipDays(s)) {
         if (y > H - 60) { doc.finishPage(page); page = doc.startPage(PdfDocument.PageInfo.Builder(W, H, doc.pages.size + 1).create()); c = page.canvas; y = 64f }
-        c.drawText(prettyDate(e.date), L, y, p); c.drawText(e.entry, L + 140, y, p); c.drawText(e.exit, L + 200, y, p)
-        c.drawText("${e.lunch}m", L + 260, y, p); right(hours(e.minutes), R - 90, y, p); right(money(e.amount), R, y, p); y += 16
+        c.drawText(prettyDate(date), L, y, p)
+        if (e == null) c.drawText("Absent", L + 110, y, bad)
+        else {
+            c.drawText(to12h(e.entry), L + 110, y, p); c.drawText(to12h(e.exit), L + 180, y, p)
+            c.drawText("${e.lunch}m" + if (e.extra > 0) " + ${e.extra}m" else "", L + 250, y, p)
+            right(hours(e.minutes), R - 90, y, p); right(money(e.amount), R, y, p)
+        }
+        y += 15
     }
     if (s.advances.isNotEmpty()) {
         y += 16; c.drawText("ADVANCES", L, y, muted); y += 16

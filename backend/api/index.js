@@ -10,9 +10,9 @@ const db = new Proxy({}, { get(_, k) {
 } });
 
 // Minutes between two "HH:MM[:SS]" times, minus lunch.
-export function workedMinutes(entry, exit, lunch) {
+export function workedMinutes(entry, exit, lunch, extra) {
   const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
-  return Math.max(0, toMin(exit) - toMin(entry) - (lunch || 0));
+  return Math.max(0, toMin(exit) - toMin(entry) - (lunch || 0) - (extra || 0));
 }
 
 function monthRange(month) {
@@ -27,17 +27,11 @@ const must = ({ data, error }) => { if (error) throw new HttpError(400, error.me
 const round2 = (n) => Math.round(n * 100) / 100;
 
 function withHours(e) {
-  const minutes = workedMinutes(e.entry_time, e.exit_time, e.lunch_minutes);
+  const minutes = workedMinutes(e.entry_time, e.exit_time, e.lunch_minutes, e.extra_break_minutes);
   return { ...e, worked_minutes: minutes, amount: round2((minutes / 60) * Number(e.hourly_rate)) };
 }
 
-async function payslip(employeeId, month) {
-  const [from, to] = monthRange(month);
-  const employee = must(await db.from('att_employee').select('*').eq('id', employeeId).single());
-  const entries = must(await db.from('att_entry').select('*').eq('employee_id', employeeId)
-    .gte('work_date', from).lte('work_date', to).order('work_date')).map(withHours);
-  const advances = must(await db.from('att_advance').select('*').eq('employee_id', employeeId)
-    .gte('given_on', from).lte('given_on', to).order('given_on'));
+function buildSlip(employee, month, entries, advances) {
   const totalMinutes = entries.reduce((s, e) => s + e.worked_minutes, 0);
   const gross = round2(entries.reduce((s, e) => s + e.amount, 0));
   const advanceTotal = round2(advances.reduce((s, a) => s + Number(a.amount), 0));
@@ -46,6 +40,25 @@ async function payslip(employeeId, month) {
     days_worked: entries.length, total_minutes: totalMinutes,
     gross, advance_total: advanceTotal, net: round2(gross - advanceTotal),
   };
+}
+
+// Loads one month in 3 parallel queries (optionally for a single employee).
+async function monthData(month, employeeId) {
+  const [from, to] = monthRange(month);
+  let eq = db.from('att_employee').select('*').order('name');
+  let en = db.from('att_entry').select('*').gte('work_date', from).lte('work_date', to).order('work_date');
+  let ad = db.from('att_advance').select('*').gte('given_on', from).lte('given_on', to).order('given_on');
+  if (employeeId) { eq = eq.eq('id', employeeId); en = en.eq('employee_id', employeeId); ad = ad.eq('employee_id', employeeId); }
+  const [emps, entries, advances] = (await Promise.all([eq, en, ad])).map(must);
+  return emps.map((e) => buildSlip(e, month,
+    entries.filter((x) => x.employee_id === e.id).map(withHours),
+    advances.filter((x) => x.employee_id === e.id)));
+}
+
+async function payslip(employeeId, month) {
+  const [slip] = await monthData(month, employeeId);
+  if (!slip) throw new HttpError(404, 'employee not found');
+  return slip;
 }
 
 async function route(method, path, q, body) {
@@ -76,7 +89,7 @@ async function route(method, path, q, body) {
         return must(await qb).map(withHours);
       }
       if (method === 'PUT') { // upsert one day for one employee
-        const row = pick(body, ['employee_id', 'work_date', 'entry_time', 'exit_time', 'lunch_minutes', 'note']);
+        const row = pick(body, ['employee_id', 'work_date', 'entry_time', 'exit_time', 'lunch_minutes', 'extra_break_minutes', 'note']);
         if (body.hourly_rate == null) {
           const emp = must(await db.from('att_employee').select('hourly_rate').eq('id', row.employee_id).single());
           row.hourly_rate = emp.hourly_rate;
@@ -101,8 +114,7 @@ async function route(method, path, q, body) {
       return payslip(Number(q.employee_id), q.month);
 
     case 'summary': {
-      const emps = must(await db.from('att_employee').select('id').order('name'));
-      const slips = await Promise.all(emps.map((e) => payslip(e.id, q.month)));
+      const slips = await monthData(q.month);
       return slips.filter((s) => s.employee.active || s.days_worked || s.advances.length)
         .map(({ entries, advances, ...rest }) => rest);
     }

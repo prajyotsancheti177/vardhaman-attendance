@@ -54,12 +54,21 @@ val Num = TextStyle(fontFeatureSettings = "tnum")
 // ---------- Formatting ----------
 private val inr = java.text.NumberFormat.getCurrencyInstance(Locale("en", "IN")).apply { maximumFractionDigits = 0 }
 fun money(v: Double): String = inr.format(v)
+private val inr2 = java.text.NumberFormat.getCurrencyInstance(Locale("en", "IN")).apply { minimumFractionDigits = 0; maximumFractionDigits = 2 }
+/** Hourly rate keeps its paise, e.g. ₹62.5. */
+fun rate(v: Double): String = inr2.format(v)
 fun hours(min: Int) = "%d:%02d".format(min / 60, min % 60)
 fun prettyDate(iso: String): String = LocalDate.parse(iso).format(DateTimeFormatter.ofPattern("EEE, d MMM"))
+fun monthName(month: String): String = YearMonth.parse(month).format(DateTimeFormatter.ofPattern("MMMM"))
+/** Every date of the slip's month paired with its entry (null = absent). */
+fun slipDays(s: Slip): List<Pair<String, Entry?>> {
+    val ym = YearMonth.parse(s.month); val byDate = s.entries.associateBy { it.date }
+    return (1..ym.lengthOfMonth()).map { ym.atDay(it).toString() }.map { it to byDate[it] }
+}
 fun prettyMonth(ym: YearMonth): String = ym.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
-fun minutesBetween(a: String, b: String, lunch: Int): Int {
+fun minutesBetween(a: String, b: String, lunch: Int, extra: Int = 0): Int {
     fun m(t: String) = t.split(":").let { it[0].toInt() * 60 + it[1].toInt() }
-    return (m(b) - m(a) - lunch).coerceAtLeast(0)
+    return (m(b) - m(a) - lunch - extra).coerceAtLeast(0)
 }
 
 // ---------- Pressable surface: subtle scale on press = instant feedback ----------
@@ -109,6 +118,21 @@ class Runner(private val scope: kotlinx.coroutines.CoroutineScope, private val s
 }
 val LocalRunner = staticCompositionLocalOf<Runner> { error("no runner") }
 
+/** Button label that turns into a spinner while a request is in flight. */
+@Composable
+fun BusyLabel(busy: Boolean, text: String) {
+    if (busy) {
+        CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+        Spacer(Modifier.width(8.dp)); Text("Saving…")
+    } else Text(text)
+}
+
+/** Thin bar shown under the header while a list is loading. */
+@Composable
+fun LoadingBar(loading: Boolean) =
+    if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = Brand, trackColor = Line)
+    else Spacer(Modifier.height(2.dp))
+
 // ---------- Time field ----------
 @Composable
 fun TimeField(label: String, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
@@ -140,9 +164,11 @@ fun EntryEditor(draft: EntryDraft, onDismiss: () -> Unit, onSaved: () -> Unit) {
     var entry by remember { mutableStateOf(draft.existing?.entry ?: Defaults.entry) }
     var exit by remember { mutableStateOf(draft.existing?.exit ?: Defaults.exit) }
     var lunch by remember { mutableStateOf((draft.existing?.lunch ?: Defaults.lunch).toString()) }
+    var extra by remember { mutableStateOf((draft.existing?.extra ?: 0).toString()) }
     var busy by remember { mutableStateOf(false) }
     val lunchMin = lunch.toIntOrNull() ?: 0
-    val worked = minutesBetween(entry, exit, lunchMin)
+    val extraMin = extra.toIntOrNull() ?: 0
+    val worked = minutesBetween(entry, exit, lunchMin, extraMin)
     val valid = exit > entry && worked > 0
 
     AlertDialog(
@@ -169,6 +195,13 @@ fun EntryEditor(draft: EntryDraft, onDismiss: () -> Unit, onSaved: () -> Unit) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), textStyle = Num,
                     )
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Extra break (min)", Modifier.weight(1f), color = Muted, fontSize = 12.sp)
+                    OutlinedTextField(
+                        extra, { extra = it.filter(Char::isDigit).take(3) }, Modifier.width(72.dp), singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), textStyle = Num,
+                    )
+                }
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Surface0).padding(12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -187,19 +220,20 @@ fun EntryEditor(draft: EntryDraft, onDismiss: () -> Unit, onSaved: () -> Unit) {
                 busy = true
                 runner.run("Saved") {
                     try {
-                        Api.saveEntry(draft.employee.id, draft.date, entry, exit, lunchMin)
+                        Api.saveEntry(draft.employee.id, draft.date, entry, exit, lunchMin, extraMin)
                         Defaults.entry = entry; Defaults.exit = exit; Defaults.lunch = lunchMin
                         onSaved()
                     } finally { busy = false }
                 }
-            }) { Text("Save") }
+            }) { BusyLabel(busy, "Save") }
         },
         dismissButton = {
             Row {
-                if (draft.existing != null) TextButton(onClick = {
-                    runner.run("Entry removed") { Api.deleteEntry(draft.existing.id); onSaved() }
+                if (draft.existing != null) TextButton(enabled = !busy, onClick = {
+                    busy = true
+                    runner.run("Entry removed") { try { Api.deleteEntry(draft.existing.id); onSaved() } finally { busy = false } }
                 }) { Text("Delete", color = Bad) }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") }
             }
         },
     )

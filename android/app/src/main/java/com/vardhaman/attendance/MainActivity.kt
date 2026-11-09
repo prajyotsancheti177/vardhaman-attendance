@@ -160,7 +160,8 @@ fun DayView(employees: List<Employee>) {
     var entries by remember { mutableStateOf<Map<Long, Entry>>(emptyMap()) }
     var editing by remember { mutableStateOf<EntryDraft?>(null) }
     var reload by remember { mutableIntStateOf(0) }
-    LaunchedEffect(date, reload) { runner.run { entries = Api.entriesForDate(date).associateBy { it.employeeId } } }
+    var loading by remember { mutableStateOf(false) }
+    LaunchedEffect(date, reload) { loading = true; runner.run { try { entries = Api.entriesForDate(date).associateBy { it.employeeId } } finally { loading = false } } }
 
     val d = LocalDate.parse(date)
     Stepper(
@@ -173,6 +174,7 @@ fun DayView(employees: List<Employee>) {
         Text("$logged of ${employees.size} logged", color = Muted)
         Text("${hours(total)} h total", color = Muted, style = Num)
     }
+    LoadingBar(loading)
     if (employees.isEmpty()) EmptyState("Add employees first")
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(employees, key = { it.id }) { e ->
@@ -182,7 +184,7 @@ fun DayView(employees: List<Employee>) {
                     Column(Modifier.weight(1f)) {
                         Text(e.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                         Text(
-                            if (en == null) "Tap to log" else "${to12h(en.entry)} – ${to12h(en.exit)} · lunch ${en.lunch}m",
+                            if (en == null) "Tap to log" else "${to12h(en.entry)} – ${to12h(en.exit)} · lunch ${en.lunch}m" + if (en.extra > 0) " + ${en.extra}m" else "",
                             color = if (en == null) Brand else Muted, fontSize = 13.sp, style = Num,
                         )
                     }
@@ -206,8 +208,9 @@ fun EmployeeMonthView(employees: List<Employee>) {
     var reload by remember { mutableIntStateOf(0) }
     val emp = employees.find { it.id == empId } ?: employees.firstOrNull()?.also { empId = it.id }
     val ym = YearMonth.parse(month)
+    var loading by remember { mutableStateOf(false) }
     LaunchedEffect(emp?.id, month, reload) {
-        if (emp != null) runner.run { entries = Api.entriesForMonth(emp.id, month).associateBy { it.date } }
+        if (emp != null) { loading = true; runner.run { try { entries = Api.entriesForMonth(emp.id, month).associateBy { it.date } } finally { loading = false } } }
     }
     if (emp == null) { EmptyState("Add employees first"); return }
 
@@ -218,6 +221,7 @@ fun EmployeeMonthView(employees: List<Employee>) {
         Text("${entries.size} days", color = Muted)
         Text("${hours(mins)} h · ${money(entries.values.sumOf { it.amount })}", color = Muted, style = Num)
     }
+    LoadingBar(loading)
     val today = LocalDate.now()
     val days = (1..ym.lengthOfMonth()).map { ym.atDay(it) }.filter { !it.isAfter(today) }.reversed()
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -270,7 +274,7 @@ fun EmployeesScreen(employees: List<Employee>, onChanged: () -> Unit) {
                             Text(e.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = if (e.active) Ink else Muted)
                             Text(if (e.active) e.phone.ifEmpty { "—" } else "Inactive", color = Muted, fontSize = 13.sp)
                         }
-                        Text("${money(e.hourlyRate)}/h", style = Num, fontWeight = FontWeight.SemiBold)
+                        Text("${rate(e.hourlyRate)}/h", style = Num, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -290,16 +294,18 @@ fun EmployeeDialog(emp: Employee?, onDismiss: () -> Unit, onSaved: () -> Unit) {
     var phone by remember { mutableStateOf(emp?.phone ?: "") }
     var rate by remember { mutableStateOf(emp?.hourlyRate?.let { if (it % 1 == 0.0) it.toInt().toString() else it.toString() } ?: "") }
     var active by remember { mutableStateOf(emp?.active ?: true) }
-    val valid = name.isNotBlank() && rate.toDoubleOrNull() != null
+    var busy by remember { mutableStateOf(false) }
+    val rateNum = rate.replace(',', '.').toDoubleOrNull()
+    val valid = name.isNotBlank() && rateNum != null
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(if (emp == null) "New employee" else "Edit employee") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)
                 OutlinedTextField(phone, { phone = it }, label = { Text("Phone") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
-                OutlinedTextField(rate, { rate = it }, label = { Text("Salary per hour (₹)") }, singleLine = true,
+                OutlinedTextField(rate, { v -> rate = v.filter { it.isDigit() || it == '.' || it == ',' }.take(9) }, label = { Text("Salary per hour (₹)") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     supportingText = { if (emp != null) Text("New rate applies to days logged from now on") })
                 if (emp != null) Row(verticalAlignment = Alignment.CenterVertically) {
@@ -308,11 +314,14 @@ fun EmployeeDialog(emp: Employee?, onDismiss: () -> Unit, onSaved: () -> Unit) {
             }
         },
         confirmButton = {
-            Button(enabled = valid, onClick = {
-                runner.run("Saved") { Api.saveEmployee(emp?.id, name.trim(), phone.trim(), rate.toDouble(), active); onSaved() }
-            }) { Text("Save") }
+            Button(enabled = valid && !busy, onClick = {
+                busy = true
+                runner.run("Saved") {
+                    try { Api.saveEmployee(emp?.id, name.trim(), phone.trim(), rateNum!!, active); onSaved() } finally { busy = false }
+                }
+            }) { BusyLabel(busy, "Save") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -326,13 +335,15 @@ fun AdvancesScreen(employees: List<Employee>) {
     var adding by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf<Advance?>(null) }
     val ym = YearMonth.parse(month)
-    LaunchedEffect(month, reload) { runner.run { list = Api.advances(month) } }
+    var loading by remember { mutableStateOf(false) }
+    LaunchedEffect(month, reload) { loading = true; runner.run { try { list = Api.advances(month) } finally { loading = false } } }
     val names = employees.associate { it.id to it.name }
 
     Box(Modifier.fillMaxSize()) {
         Column {
             Stepper(prettyMonth(ym), { month = ym.minusMonths(1).toString() }, { month = ym.plusMonths(1).toString() })
             Text("Total ${money(list.sumOf { it.amount })}", Modifier.padding(horizontal = 20.dp), color = Muted, style = Num)
+            LoadingBar(loading)
             if (list.isEmpty()) EmptyState("No advances this month")
             LazyColumn(contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 96.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(list, key = { it.id }) { a ->
@@ -374,9 +385,11 @@ fun AdvanceDialog(employees: List<Employee>, onDismiss: () -> Unit, onSaved: () 
     var amount by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     var date by remember { mutableStateOf(LocalDate.now()) }
+    var busy by remember { mutableStateOf(false) }
+    val amt = amount.replace(',', '.').toDoubleOrNull() ?: 0.0
     val ctx = LocalContext.current
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("Give advance") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -391,11 +404,14 @@ fun AdvanceDialog(employees: List<Employee>, onDismiss: () -> Unit, onSaved: () 
             }
         },
         confirmButton = {
-            Button(enabled = emp != null && (amount.toDoubleOrNull() ?: 0.0) > 0, onClick = {
-                runner.run("Advance recorded") { Api.addAdvance(emp!!.id, amount.toDouble(), date.toString(), note.trim()); onSaved() }
-            }) { Text("Save") }
+            Button(enabled = emp != null && amt > 0 && !busy, onClick = {
+                busy = true
+                runner.run("Advance recorded") {
+                    try { Api.addAdvance(emp!!.id, amt, date.toString(), note.trim()); onSaved() } finally { busy = false }
+                }
+            }) { BusyLabel(busy, "Save") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -408,7 +424,8 @@ fun PayslipsScreen(employees: List<Employee>) {
     var rows by remember { mutableStateOf<List<Slip>>(emptyList()) }
     var open by remember { mutableStateOf<Slip?>(null) }
     val ym = YearMonth.parse(month)
-    LaunchedEffect(month) { runner.run { rows = Api.summary(month) } }
+    var loading by remember { mutableStateOf(false) }
+    LaunchedEffect(month) { loading = true; runner.run { try { rows = Api.summary(month) } finally { loading = false } } }
 
     open?.let { slip -> PayslipDetail(slip, onBack = { open = null }, onShare = { sharePayslip(ctx, slip) }); return }
 
@@ -418,10 +435,11 @@ fun PayslipsScreen(employees: List<Employee>) {
             Text("Net payable", color = Muted)
             Text(money(rows.sumOf { it.net }), style = Num, fontWeight = FontWeight.SemiBold)
         }
+        LoadingBar(loading)
         if (rows.isEmpty()) EmptyState("Nothing logged this month")
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(rows, key = { it.employee.id }) { s ->
-                PressCard({ runner.run { open = Api.payslip(s.employee.id, month) } }) {
+                PressCard({ if (!loading) { loading = true; runner.run { try { open = Api.payslip(s.employee.id, month) } finally { loading = false } } } }) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(s.employee.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
@@ -447,7 +465,7 @@ fun PayslipDetail(s: Slip, onBack: () -> Unit, onShare: () -> Unit) {
                 IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
                 Column(Modifier.weight(1f)) {
                     Text(s.employee.name, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                    Text(prettyMonth(YearMonth.parse(s.month)), color = Muted)
+                    Text(monthName(s.month), color = Muted)
                 }
                 FilledTonalButton(onClick = onShare) { Icon(Icons.Default.Share, null); Spacer(Modifier.width(6.dp)); Text("PDF") }
             }
@@ -465,12 +483,15 @@ fun PayslipDetail(s: Slip, onBack: () -> Unit, onShare: () -> Unit) {
             }
         }
         item { SectionTitle("Daily log", Modifier.padding(top = 4.dp)) }
-        items(s.entries, key = { it.id }) { e ->
+        items(slipDays(s), key = { it.first }) { (date, e) ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
-                Text(prettyDate(e.date), Modifier.width(100.dp))
-                Text("${e.entry}–${e.exit}", Modifier.weight(1f), color = Muted, style = Num)
-                Text(hours(e.minutes), Modifier.width(52.dp), style = Num)
-                Text(money(e.amount), Modifier.width(80.dp), style = Num, textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                Text(prettyDate(date), Modifier.width(100.dp))
+                if (e == null) Text("Absent", Modifier.weight(1f), color = Bad)
+                else {
+                    Text("${to12h(e.entry)} – ${to12h(e.exit)}", Modifier.weight(1f), color = Muted, style = Num, fontSize = 13.sp)
+                    Text(hours(e.minutes), Modifier.width(48.dp), style = Num)
+                    Text(money(e.amount), Modifier.width(72.dp), style = Num, textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                }
             }
         }
         if (s.advances.isNotEmpty()) {
