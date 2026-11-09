@@ -12,13 +12,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFeatureSettings
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.TextStyle
@@ -72,7 +73,7 @@ fun PressCard(onClick: () -> Unit, modifier: Modifier = Modifier, content: @Comp
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(14.dp))
             .background(Color.White)
-            .clickable(interactionSource = src, indication = androidx.compose.material.ripple.rememberRipple(color = Brand)) { onClick() }
+            .clickable(interactionSource = src, indication = ripple(color = Brand)) { onClick() }
             .padding(horizontal = 16.dp, vertical = 14.dp),
         content = content,
     )
